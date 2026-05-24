@@ -79,9 +79,11 @@ conversation.stream_text_deltas = lambda *args, **kwargs: iter(())
 conversation.text_backend = lambda: object()
 sys.modules["services.protocol.conversation"] = conversation
 
+from fastapi import HTTPException
+
 from services.models import resolve_model
 from services.network import flaresolverr
-from services.protocol import openai_v1_chat_complete
+from services.protocol import openai_v1_chat_complete, openai_v1_response
 from services.providers import grok
 
 
@@ -105,6 +107,22 @@ class GrokProviderTests(unittest.TestCase):
         self.assertEqual(payload["input"][0]["role"], "user")
         self.assertEqual(payload["input"][0]["content"], [{"type": "input_text", "text": "Hello"}])
         self.assertEqual(payload["input"][1]["content"], [{"type": "output_text", "text": "Hi"}])
+
+    def test_build_console_payload_preserves_response_tools(self) -> None:
+        spec = resolve_model("grok-4.3")
+        payload = grok.build_console_payload(
+            spec,
+            {
+                "tools": [{"type": "web_search"}],
+                "tool_choice": "auto",
+                "parallel_tool_calls": True,
+            },
+            [{"role": "user", "content": "Search the web"}],
+        )
+
+        self.assertEqual(payload["tools"], [{"type": "web_search"}])
+        self.assertEqual(payload["tool_choice"], "auto")
+        self.assertTrue(payload["parallel_tool_calls"])
 
     def test_extract_console_text_from_common_shapes(self) -> None:
         self.assertEqual(grok.extract_console_text({"output_text": "direct"}), "direct")
@@ -452,6 +470,57 @@ class GrokProviderTests(unittest.TestCase):
         message = response["choices"][0]["message"]
         self.assertEqual(message["content"], "Hi")
         self.assertEqual(message["reasoning_content"], "think")
+
+    def test_responses_grok_console_routes_to_console_completion(self) -> None:
+        body = {
+            "model": "grok-4.3",
+            "input": [{"role": "user", "content": [{"type": "input_text", "text": "Hello"}]}],
+            "tools": [{"type": "web_search"}],
+        }
+        with mock.patch.object(
+            grok,
+            "console_chat_completion",
+            return_value=grok.GrokConsoleCompletion(content="Hi from Grok"),
+        ) as patched_console:
+            response = openai_v1_response.handle(body)
+
+        patched_console.assert_called_once()
+        self.assertEqual(patched_console.call_args.args[0]["tools"], [{"type": "web_search"}])
+        self.assertEqual(response["object"], "response")
+        self.assertEqual(response["status"], "completed")
+        content = response["output"][0]["content"][0]
+        self.assertEqual(content["type"], "output_text")
+        self.assertEqual(content["text"], "Hi from Grok")
+
+    def test_streaming_responses_grok_console_emits_response_events(self) -> None:
+        body = {
+            "model": "grok-4.3",
+            "input": "Hello",
+            "stream": True,
+        }
+        with mock.patch.object(
+            grok,
+            "console_chat_completion",
+            return_value=grok.GrokConsoleCompletion(content="Hi"),
+        ) as patched_console:
+            events = list(openai_v1_response.handle(body))
+
+        patched_console.assert_called_once()
+        event_types = [event.get("type") for event in events]
+        self.assertEqual(event_types[0], "response.created")
+        self.assertIn("response.output_text.delta", event_types)
+        self.assertEqual(event_types[-1], "response.completed")
+
+    def test_responses_grok_app_chat_returns_explicit_error(self) -> None:
+        body = {
+            "model": "grok-4.20-heavy",
+            "input": "Hello",
+        }
+        with self.assertRaises(HTTPException) as ctx:
+            list(openai_v1_response.handle(body))
+
+        self.assertEqual(getattr(ctx.exception, "status_code", None), 501)
+        self.assertIn("Grok app-chat is not supported", str(getattr(ctx.exception, "detail", "")))
 
     def test_grok_image_lite_chat_routes_to_app_chat_image_outputs(self) -> None:
         body = {

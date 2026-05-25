@@ -44,6 +44,18 @@ jobs:
           fi
 
           platforms="${platforms//[[:space:]]/}"
+          if [[ -z "${platforms}" ]]; then
+            platforms="linux/amd64"
+          fi
+
+          IFS=',' read -ra requested_platforms <<< "${platforms}"
+          for platform in "${requested_platforms[@]}"; do
+            if [[ "${platform}" != "linux/amd64" && "${platform}" != "linux/arm64" ]]; then
+              echo "Unsupported Docker platform: ${platform}. Supported platforms: linux/amd64,linux/arm64" >&2
+              exit 1
+            fi
+          done
+
           if [[ "${platforms}" == *,* ]]; then
             cache_mode="max"
           else

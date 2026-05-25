@@ -385,13 +385,47 @@ def _feedback_status(upstream_status: int) -> str | None:
     return None
 
 
-def _raise_console_upstream_error(access_token: str, upstream_status: int) -> None:
+def _console_upstream_error_detail(response: object | None) -> str:
+    if response is None:
+        return ""
+    json_data: object = None
+    json_method = getattr(response, "json", None)
+    if callable(json_method):
+        try:
+            json_data = json_method()
+        except Exception:
+            json_data = None
+    if isinstance(json_data, dict):
+        error = json_data.get("error")
+        if isinstance(error, dict):
+            for key in ("message", "code", "reason", "type"):
+                value = error.get(key)
+                if value:
+                    return str(value)
+        elif error:
+            return str(error)
+        for key in ("message", "detail", "code", "reason"):
+            value = json_data.get(key)
+            if value:
+                return str(value)
+    text = getattr(response, "text", "") or ""
+    if not text:
+        content = getattr(response, "content", b"")
+        if isinstance(content, bytes):
+            text = content.decode("utf-8", errors="replace")
+    return str(text).strip()[:400]
+
+
+def _raise_console_upstream_error(access_token: str, upstream_status: int, response: object | None = None) -> None:
     feedback_status = _feedback_status(upstream_status)
     if feedback_status:
         from services.account_service import account_service
 
         account_service.update_account(access_token, {"status": feedback_status})
     message = f"Grok upstream error (HTTP {upstream_status})"
+    detail = _console_upstream_error_detail(response)
+    if detail:
+        message = f"{message}: {detail}"
     raise GrokConsoleError(message, _openai_status(upstream_status), upstream_status)
 
 
@@ -445,7 +479,7 @@ class GrokConsoleClient:
         except requests.exceptions.RequestException as exc:
             raise GrokConsoleError(f"Grok upstream request failed: {exc}", 502) from exc
         if response.status_code >= 400:
-            _raise_console_upstream_error(self.access_token, int(response.status_code))
+            _raise_console_upstream_error(self.access_token, int(response.status_code), response)
         data = response.json()
         if not isinstance(data, dict):
             raise GrokConsoleError("Grok upstream returned an invalid response", 502)
@@ -468,7 +502,7 @@ class GrokConsoleClient:
         except requests.exceptions.RequestException as exc:
             raise GrokConsoleError(f"Grok upstream request failed: {exc}", 502) from exc
         if response.status_code >= 400:
-            _raise_console_upstream_error(self.access_token, int(response.status_code))
+            _raise_console_upstream_error(self.access_token, int(response.status_code), response)
         try:
             for event in _iter_console_stream_events(response.iter_lines()):
                 _raise_for_console_stream_event(event)

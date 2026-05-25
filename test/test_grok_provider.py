@@ -885,6 +885,39 @@ class GrokProviderTests(unittest.TestCase):
 
         self.assertIn("upstream failed", str(ctx.exception))
 
+    def test_grok_console_stream_response_includes_upstream_error_detail(self) -> None:
+        account_service = types.SimpleNamespace(update_account=mock.Mock())
+
+        class FakeResponse:
+            status_code = 402
+
+            def json(self):
+                return {"error": {"message": "quota exhausted"}}
+
+        class FakeSession:
+            headers: dict[str, str] = {}
+
+            def __init__(self, **kwargs: object) -> None:
+                pass
+
+            def post(self, url: str, **kwargs: object) -> FakeResponse:
+                return FakeResponse()
+
+            def close(self) -> None:
+                pass
+
+        with (
+            mock.patch.dict(sys.modules, {"services.account_service": types.SimpleNamespace(account_service=account_service)}),
+            mock.patch.object(grok.config, "data", {}),
+            mock.patch("curl_cffi.requests.Session", FakeSession),
+        ):
+            client = grok.GrokConsoleClient("token-value")
+            with self.assertRaises(grok.GrokConsoleError) as ctx:
+                list(client.stream_response({"model": "grok-4.3", "input": []}))
+
+        self.assertIn("quota exhausted", str(ctx.exception))
+        account_service.update_account.assert_called_once_with("token-value", {"status": "限流"})
+
     def test_grok_console_uses_configured_network_profile(self) -> None:
         settings = {
             "network_profiles": {

@@ -641,6 +641,7 @@ class GrokProviderTests(unittest.TestCase):
 
     def test_grok_console_stream_response_parses_sse_lines(self) -> None:
         calls: list[dict[str, object]] = []
+        closed: list[bool] = []
 
         class FakeResponse:
             status_code = 200
@@ -653,6 +654,9 @@ class GrokProviderTests(unittest.TestCase):
                     b"data: [DONE]",
                     b'data: {"type":"response.output_text.delta","delta":" ignored"}',
                 ])
+
+            def close(self) -> None:
+                closed.append(True)
 
         class FakeSession:
             headers: dict[str, str] = {}
@@ -675,6 +679,7 @@ class GrokProviderTests(unittest.TestCase):
         self.assertEqual(calls[0]["url"], grok.CONSOLE_RESPONSES_URL)
         self.assertTrue(calls[0]["stream"])
         self.assertEqual(calls[0]["json"]["stream"], True)
+        self.assertEqual(closed, [True])
 
     def test_grok_console_stream_response_uses_sse_event_name_when_data_has_no_type(self) -> None:
         class FakeResponse:

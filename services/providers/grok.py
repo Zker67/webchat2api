@@ -465,9 +465,14 @@ class GrokConsoleClient:
             raise GrokConsoleError(f"Grok upstream request failed: {exc}", 502) from exc
         if response.status_code >= 400:
             _raise_console_upstream_error(self.access_token, int(response.status_code))
-        for event in _iter_console_stream_events(response.iter_lines()):
-            _raise_for_console_stream_event(event)
-            yield event
+        try:
+            for event in _iter_console_stream_events(response.iter_lines()):
+                _raise_for_console_stream_event(event)
+                yield event
+        finally:
+            close = getattr(response, "close", None)
+            if callable(close):
+                close()
 
 
 def _cookie_items(cookie_header: str) -> list[tuple[str, str]]:

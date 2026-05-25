@@ -676,6 +676,45 @@ class GrokProviderTests(unittest.TestCase):
         self.assertTrue(calls[0]["stream"])
         self.assertEqual(calls[0]["json"]["stream"], True)
 
+    def test_grok_console_stream_response_uses_sse_event_name_when_data_has_no_type(self) -> None:
+        class FakeResponse:
+            status_code = 200
+
+            def iter_lines(self):
+                return iter([
+                    b"event: response.reasoning_summary_text.delta",
+                    b'data: {"delta":"think"}',
+                    b"event: response.output_text.delta",
+                    b'data: {"delta":"Hi"}',
+                    b"data: [DONE]",
+                ])
+
+        class FakeSession:
+            headers: dict[str, str] = {}
+
+            def __init__(self, **kwargs: object) -> None:
+                pass
+
+            def post(self, url: str, **kwargs: object) -> FakeResponse:
+                return FakeResponse()
+
+            def close(self) -> None:
+                pass
+
+        with mock.patch.object(grok.config, "data", {}), mock.patch("curl_cffi.requests.Session", FakeSession):
+            client = grok.GrokConsoleClient("token-value")
+            events = list(client.stream_response({"model": "grok-4.3", "input": []}))
+
+        self.assertEqual(
+            events,
+            [
+                {"type": "response.reasoning_summary_text.delta", "delta": "think"},
+                {"type": "response.output_text.delta", "delta": "Hi"},
+            ],
+        )
+        self.assertEqual(grok.extract_console_stream_delta(events[0]).reasoning_content, "think")
+        self.assertEqual(grok.extract_console_stream_delta(events[1]).content, "Hi")
+
     def test_grok_console_stream_response_raises_stream_errors(self) -> None:
         class FakeResponse:
             status_code = 200

@@ -242,12 +242,16 @@ def extract_console_stream_delta(event: dict[str, Any]) -> GrokConsoleStreamDelt
 
 
 def _iter_console_stream_events(lines: Iterable[object]) -> Iterator[dict[str, Any]]:
+    current_event = ""
     for raw_line in lines:
         if not raw_line:
             continue
         line = raw_line.decode("utf-8", errors="replace") if isinstance(raw_line, bytes) else str(raw_line)
         line = line.strip()
-        if not line or line.startswith(":") or line.startswith("event:"):
+        if not line or line.startswith(":"):
+            continue
+        if line.startswith("event:"):
+            current_event = line[6:].strip()
             continue
         payload = line[5:].strip() if line.startswith("data:") else line
         if not payload or payload == "[DONE]":
@@ -258,12 +262,14 @@ def _iter_console_stream_events(lines: Iterable[object]) -> Iterator[dict[str, A
             logger.warning({"event": "grok_console_stream_invalid_json"})
             continue
         if isinstance(event, dict):
+            if current_event and not event.get("type"):
+                event = {"type": current_event, **event}
             yield event
 
 
 def _raise_for_console_stream_event(event: dict[str, Any]) -> None:
     event_type = str(event.get("type") or "").lower()
-    if event_type not in {"error", "response.failed", "response.incomplete"}:
+    if event_type not in {"error", "response.failed", "response.error", "response.incomplete", "response.cancelled"}:
         return
     error = event.get("error")
     response = event.get("response")

@@ -992,16 +992,18 @@ def console_chat_completion_events(body: dict[str, Any], spec: ModelSpec, messag
     if not access_token:
         raise HTTPException(status_code=503, detail={"error": "no available Grok account"})
     payload = build_console_payload(spec, body, messages)
-    stream_started = False
+    mark_used = False
     try:
         with GrokConsoleClient(access_token) as client:
             for event in client.stream_response(payload):
-                stream_started = True
+                mark_used = True
                 yield event
+            mark_used = True
     except GrokConsoleError as exc:
+        mark_used = False
         raise HTTPException(status_code=exc.status_code, detail={"error": str(exc)}) from exc
     finally:
-        if stream_started:
+        if mark_used:
             account_service.mark_text_used(access_token)
 
 

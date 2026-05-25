@@ -271,8 +271,8 @@ def _iter_console_stream_events(lines: Iterable[object]) -> Iterator[dict[str, A
         if raw_line is None:
             continue
         line = raw_line.decode("utf-8", errors="replace") if isinstance(raw_line, bytes) else str(raw_line)
-        line = line.strip()
-        if not line:
+        line = line.rstrip("\r\n")
+        if not line.strip():
             event = flush_data()
             if event is not None:
                 yield event
@@ -283,17 +283,23 @@ def _iter_console_stream_events(lines: Iterable[object]) -> Iterator[dict[str, A
             event = flush_data()
             if event is not None:
                 yield event
-            current_event = line[6:].strip()
+            current_event = line[6:]
+            if current_event.startswith(" "):
+                current_event = current_event[1:]
+            current_event = current_event.strip()
             continue
         if line.startswith("data:"):
-            payload = line[5:].strip()
-            if payload == "[DONE]":
+            payload = line[5:]
+            if payload.startswith(" "):
+                payload = payload[1:]
+            if payload.strip() == "[DONE]":
                 event = flush_data()
                 if event is not None:
                     yield event
                 break
             data_lines.append(payload)
             continue
+        line = line.strip()
         if line.startswith("{"):
             event = flush_data()
             if event is not None:
@@ -977,12 +983,17 @@ def console_chat_completion_events(body: dict[str, Any], spec: ModelSpec, messag
     if not access_token:
         raise HTTPException(status_code=503, detail={"error": "no available Grok account"})
     payload = build_console_payload(spec, body, messages)
+    stream_started = False
     try:
         with GrokConsoleClient(access_token) as client:
-            yield from client.stream_response(payload)
+            for event in client.stream_response(payload):
+                stream_started = True
+                yield event
     except GrokConsoleError as exc:
         raise HTTPException(status_code=exc.status_code, detail={"error": str(exc)}) from exc
-    account_service.mark_text_used(access_token)
+    finally:
+        if stream_started:
+            account_service.mark_text_used(access_token)
 
 
 def chat_completion(body: dict[str, Any], spec: ModelSpec, messages: list[dict[str, Any]]) -> str:

@@ -241,30 +241,70 @@ def extract_console_stream_delta(event: dict[str, Any]) -> GrokConsoleStreamDelt
     return GrokConsoleStreamDelta(content=text)
 
 
+def _parse_console_stream_payload(payload: str, current_event: str) -> dict[str, Any] | None:
+    if not payload:
+        return None
+    try:
+        event = json.loads(payload)
+    except json.JSONDecodeError:
+        logger.warning({"event": "grok_console_stream_invalid_json"})
+        return None
+    if not isinstance(event, dict):
+        return None
+    if current_event and not event.get("type"):
+        event = {"type": current_event, **event}
+    return event
+
+
 def _iter_console_stream_events(lines: Iterable[object]) -> Iterator[dict[str, Any]]:
     current_event = ""
+    data_lines: list[str] = []
+
+    def flush_data() -> dict[str, Any] | None:
+        if not data_lines:
+            return None
+        payload = "\n".join(data_lines).strip()
+        data_lines.clear()
+        return _parse_console_stream_payload(payload, current_event)
+
     for raw_line in lines:
-        if not raw_line:
+        if raw_line is None:
             continue
         line = raw_line.decode("utf-8", errors="replace") if isinstance(raw_line, bytes) else str(raw_line)
         line = line.strip()
-        if not line or line.startswith(":"):
+        if not line:
+            event = flush_data()
+            if event is not None:
+                yield event
+            continue
+        if line.startswith(":"):
             continue
         if line.startswith("event:"):
+            event = flush_data()
+            if event is not None:
+                yield event
             current_event = line[6:].strip()
             continue
-        payload = line[5:].strip() if line.startswith("data:") else line
-        if not payload or payload == "[DONE]":
-            break
-        try:
-            event = json.loads(payload)
-        except json.JSONDecodeError:
-            logger.warning({"event": "grok_console_stream_invalid_json"})
+        if line.startswith("data:"):
+            payload = line[5:].strip()
+            if payload == "[DONE]":
+                event = flush_data()
+                if event is not None:
+                    yield event
+                break
+            data_lines.append(payload)
             continue
-        if isinstance(event, dict):
-            if current_event and not event.get("type"):
-                event = {"type": current_event, **event}
-            yield event
+        if line.startswith("{"):
+            event = flush_data()
+            if event is not None:
+                yield event
+            event = _parse_console_stream_payload(line, current_event)
+            if event is not None:
+                yield event
+
+    event = flush_data()
+    if event is not None:
+        yield event
 
 
 def _raise_for_console_stream_event(event: dict[str, Any]) -> None:

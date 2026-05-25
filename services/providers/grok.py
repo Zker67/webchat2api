@@ -1034,7 +1034,6 @@ def console_chat_completion_events(body: dict[str, Any], spec: ModelSpec, messag
                 yield event
             mark_used = True
     except GrokConsoleError as exc:
-        mark_used = False
         raise HTTPException(status_code=exc.status_code, detail={"error": str(exc)}) from exc
     finally:
         if mark_used:

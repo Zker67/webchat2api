@@ -857,6 +857,42 @@ class GrokProviderTests(unittest.TestCase):
         self.assertEqual(events, [])
         account_service.mark_text_used.assert_called_once_with("selected-token")
 
+    def test_grok_console_stream_marks_account_used_after_partial_stream_error(self) -> None:
+        account_service = types.SimpleNamespace(
+            get_text_access_token=mock.Mock(return_value="selected-token"),
+            mark_text_used=mock.Mock(),
+        )
+        spec = resolve_model("grok-4.3")
+
+        class FakeClient:
+            def __init__(self, access_token: str) -> None:
+                self.access_token = access_token
+
+            def __enter__(self) -> "FakeClient":
+                return self
+
+            def __exit__(self, exc_type, exc, tb) -> None:
+                pass
+
+            def stream_response(self, payload):
+                yield {"type": "response.output_text.delta", "delta": "Hi"}
+                raise grok.GrokConsoleError("stream failed", 502)
+
+        with (
+            mock.patch.dict(sys.modules, {"services.account_service": types.SimpleNamespace(account_service=account_service)}),
+            mock.patch.object(grok, "GrokConsoleClient", FakeClient),
+        ):
+            events = grok.console_chat_completion_events(
+                {"model": "grok-4.3"},
+                spec,
+                [{"role": "user", "content": "Hello"}],
+            )
+            self.assertEqual(next(events), {"type": "response.output_text.delta", "delta": "Hi"})
+            with self.assertRaises(grok.HTTPException):
+                next(events)
+
+        account_service.mark_text_used.assert_called_once_with("selected-token")
+
     def test_grok_console_stream_response_raises_stream_errors(self) -> None:
         class FakeResponse:
             status_code = 200

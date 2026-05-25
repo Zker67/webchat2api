@@ -261,11 +261,15 @@ def _iter_console_stream_events(lines: Iterable[object]) -> Iterator[dict[str, A
     data_lines: list[str] = []
 
     def flush_data() -> dict[str, Any] | None:
+        nonlocal current_event
         if not data_lines:
+            current_event = ""
             return None
         payload = "\n".join(data_lines).strip()
         data_lines.clear()
-        return _parse_console_stream_payload(payload, current_event)
+        event = _parse_console_stream_payload(payload, current_event)
+        current_event = ""
+        return event
 
     for raw_line in lines:
         if raw_line is None:
